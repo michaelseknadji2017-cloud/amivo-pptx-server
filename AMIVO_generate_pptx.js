@@ -6,9 +6,51 @@
 
 const express = require("express");
 const pptxgen = require("pptxgenjs");
+const https = require("https");
 
 const app = express();
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "10mb" }));
+
+// ============================================================
+// CONFIG AIRTABLE
+// ============================================================
+const AIRTABLE_TOKEN = process.env.AIRTABLE_TOKEN;
+const AIRTABLE_BASE_ID = "apprubsfPnIKKCVd1";
+const AIRTABLE_TABLE_ID = "tblXHhIcW0qnpa7HI";
+
+// Fetch record from Airtable by session_id
+function fetchFromAirtable(sessionId) {
+  return new Promise((resolve, reject) => {
+    const formula = encodeURIComponent(`{session_id}="${sessionId}"`);
+    const options = {
+      hostname: "api.airtable.com",
+      path: `/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?filterByFormula=${formula}&maxRecords=1`,
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${AIRTABLE_TOKEN}`,
+        "Content-Type": "application/json"
+      }
+    };
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", chunk => data += chunk);
+      res.on("end", () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.records && json.records.length > 0) {
+            resolve(json.records[0].fields);
+          } else {
+            reject(new Error(`No record found for session_id: ${sessionId}`));
+          }
+        } catch (e) {
+          reject(new Error(`Airtable parse error: ${e.message}`));
+        }
+      });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
 
 // ============================================================
 // PALETTE — Le Procès
@@ -302,13 +344,26 @@ async function generatePPTX(D) {
 app.get("/", (req, res) => res.json({ status: "AMIVO PPTX Generator — OK" }));
 
 // Route principale : POST /generate
-// Body : { "claude_output": "<json brut ou wrappé>" }
+// Body : { "session_id": "amivo-XXXX" } OU { "claude_output": "<json brut>" }
 app.post("/generate", async (req, res) => {
   try {
-    const { claude_output } = req.body;
-    if (!claude_output) return res.status(400).json({ error: "Missing claude_output" });
+    const { session_id, claude_output } = req.body;
+    let DATA;
 
-    const DATA = parseClaudeOutput(claude_output);
+    if (session_id) {
+      // Mode production : on fetch depuis Airtable
+      console.log(`🔍 Fetching Airtable for session_id: ${session_id}`);
+      const fields = await fetchFromAirtable(session_id);
+      const rawJson = fields.payload_json;
+      if (!rawJson) return res.status(400).json({ error: "No payload_json in Airtable record" });
+      DATA = parseClaudeOutput(rawJson);
+    } else if (claude_output) {
+      // Mode test : JSON passé directement
+      DATA = parseClaudeOutput(claude_output);
+    } else {
+      return res.status(400).json({ error: "Missing session_id or claude_output" });
+    }
+
     console.log(`✅ Génération PPTX pour ${DATA.prenom} / ${DATA.destination}`);
 
     const base64 = await generatePPTX(DATA);
