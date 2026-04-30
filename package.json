@@ -1,0 +1,16 @@
+{
+  "name": "amivo-pptx-generator",
+  "version": "1.0.0",
+  "description": "AMIVO — Générateur PPTX personnalisé via JSON Claude",
+  "main": "AMIVO_generate_pptx.js",
+  "scripts": {
+    "start": "node AMIVO_generate_pptx.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "pptxgenjs": "^3.12.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
