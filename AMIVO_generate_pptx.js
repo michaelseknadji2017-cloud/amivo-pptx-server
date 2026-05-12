@@ -7,6 +7,7 @@
 const express = require("express");
 const pptxgen = require("pptxgenjs");
 const https = require("https");
+const PDFDocument = require("pdfkit");
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -453,6 +454,211 @@ async function generatePPTX(D) {
 }
 
 // ============================================================
+// GÉNÉRATION PDF
+// ============================================================
+function generatePDF(D) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: "A4", margin: 0, autoFirstPage: false });
+    const chunks = [];
+    doc.on("data", c => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks).toString("base64")));
+    doc.on("error", reject);
+
+    const W = 595.28, H = 841.89, M = 40, CW = W - 2 * M;
+    const INK = "#1A1209", RED = "#C0392B", GOLD = "#B8860B";
+    const PAPER = "#F2E8D5", GREY = "#666666", WHITE = "#FFFFFF";
+
+    const footerText = `AMIVO — LE PROCÈS — ${(D.prenom||"").toUpperCase()} / ${(D.destination||"").toUpperCase()}`;
+
+    function newPage(bgColor) {
+      doc.addPage();
+      if (bgColor) doc.rect(0, 0, W, H).fill(bgColor);
+      doc.rect(0, 0, W, 4).fill(GOLD);
+      doc.rect(0, H - 28, W, 28).fill(INK);
+      doc.rect(0, H - 28, W, 2).fill(GOLD);
+      doc.fillColor(GREY).fontSize(7).font("Helvetica").text(footerText, M, H - 18, { width: CW });
+    }
+
+    function darkHeader(title, sub) {
+      newPage(WHITE);
+      doc.rect(0, 0, W, 72).fill(INK);
+      doc.rect(0, 72, W, 3).fill(GOLD);
+      doc.fillColor(GOLD).fontSize(7).font("Helvetica").text("AMIVO • EVG & EVJF", 0, 14, { width: W, align: "center", characterSpacing: 3 });
+      doc.fillColor(WHITE).fontSize(16).font("Helvetica-Bold").text(title, M, 28, { width: CW, align: "center" });
+      if (sub) doc.fillColor(GREY).fontSize(8).font("Helvetica").text(sub, M, 54, { width: CW, align: "center" });
+      doc.y = 90;
+    }
+
+    function sectionBar(text, color, textColor) {
+      const y = doc.y;
+      doc.rect(M, y, CW, 18).fill(color || RED);
+      doc.fillColor(textColor || WHITE).fontSize(8).font("Helvetica-Bold").text(text, M + 8, y + 5, { width: CW - 16 });
+      doc.y = y + 22;
+    }
+
+    // ── PAGE 1 : COUVERTURE ──────────────────────────────────
+    newPage(INK);
+    doc.fillColor(GREY).fontSize(8).font("Helvetica").text("TRIBUNAL CORRECTIONNEL SUPRÊME", 0, 55, { width: W, align: "center", characterSpacing: 3 });
+    doc.fillColor(GOLD).fontSize(7).text(`Dossier N° ${D.session_id||""}`, 0, 72, { width: W, align: "center" });
+    doc.fillColor(GREY).fontSize(13).font("Helvetica").text("L'AFFAIRE", 0, 155, { width: W, align: "center", characterSpacing: 6 });
+    doc.fillColor(PAPER).fontSize(48).font("Helvetica-Bold").text((D.prenom||"").toUpperCase(), 0, 178, { width: W, align: "center", characterSpacing: 2 });
+    doc.fillColor(PAPER).fontSize(10).font("Helvetica-Oblique").text(D.titre_narratif||"", M, 285, { width: CW, align: "center" });
+    doc.rect(M + 70, 318, CW - 140, 34).fill(RED);
+    doc.fillColor(WHITE).fontSize(10).font("Helvetica-Bold").text(`dit « ${D.surnom_officiel||""} »`, M + 70, 329, { width: CW - 140, align: "center" });
+    doc.fillColor(GREY).fontSize(8).font("Helvetica").text(`${D.destination||""}  ·  ${D.dates||""}  ·  ${D.nb_participants||""}`, 0, 372, { width: W, align: "center" });
+    doc.rect(M, H - 90, CW, 1).fill(GOLD);
+    doc.fillColor(GREY).fontSize(8).font("Helvetica").text("AMIVO", 0, H - 75, { width: W, align: "center", characterSpacing: 8 });
+    doc.fillColor(GREY).fontSize(7).text("EVG & EVJF ULTRA-PERSONNALISÉS PAR IA", 0, H - 58, { width: W, align: "center", characterSpacing: 2 });
+
+    // ── PAGE 2 : DOSSIER D'ACCUSATION ───────────────────────
+    darkHeader("DOSSIER D'ACCUSATION", "§ 01");
+    if (D.dossier_intro) {
+      doc.rect(M, doc.y, CW, 1).fill(GOLD); doc.y += 6;
+      doc.fillColor(INK).fontSize(10).font("Helvetica-Oblique").text(D.dossier_intro, M, doc.y, { width: CW }); doc.y += 12;
+    }
+    [1,2,3].forEach(n => {
+      const t = D[`chef_0${n}_intitule`]||"", det = D[`chef_0${n}_detail`]||"", agg = D[`chef_0${n}_aggravant`]||"";
+      if (!t) return;
+      doc.rect(M, doc.y, CW, 18).fill(RED);
+      doc.fillColor(WHITE).fontSize(8).font("Helvetica-Bold").text(`Chef N° 0${n} — ${t}`, M + 8, doc.y + 5, { width: CW - 16 }); doc.y += 22;
+      doc.fillColor(GREY).fontSize(9).font("Helvetica").text(det, M + 8, doc.y, { width: CW - 16 }); doc.y += 5;
+      doc.fillColor(RED).fontSize(8).font("Helvetica-Oblique").text(`⚠ ${agg}`, M + 8, doc.y, { width: CW - 16 }); doc.y += 14;
+      doc.rect(M, doc.y, CW, 0.5).fill("#E0D0C0"); doc.y += 10;
+    });
+    if (D.temoins_liste) {
+      doc.fillColor(GOLD).fontSize(8).font("Helvetica-Bold").text("TÉMOINS À CHARGE :", M, doc.y); doc.y += 13;
+      doc.fillColor(INK).fontSize(9).font("Helvetica").text(D.temoins_liste, M, doc.y, { width: CW });
+    }
+
+    // ── PAGE 3 : MANDAT D'ARRÊT ─────────────────────────────
+    newPage("#F5EDD8");
+    doc.rect(0, 0, W, 4).fill(GOLD);
+    doc.fillColor(INK).fontSize(9).font("Helvetica-Bold").text("RÉPUBLIQUE FRANÇAISE", 0, 22, { width: W, align: "center", characterSpacing: 4 });
+    doc.fillColor(INK).fontSize(8).font("Helvetica").text("TRIBUNAL CORRECTIONNEL SUPRÊME", 0, 38, { width: W, align: "center", characterSpacing: 2 });
+    doc.rect(M, 54, CW, 2).fill(INK);
+    doc.fillColor(INK).fontSize(22).font("Helvetica-Bold").text("MANDAT D'ARRÊT", 0, 64, { width: W, align: "center", characterSpacing: 4 });
+    doc.fillColor(GREY).fontSize(8).font("Helvetica-Oblique").text(`N° ${D.session_id||""}`, 0, 96, { width: W, align: "center" });
+    doc.rect(M, 110, CW, 1).fill(INK);
+    doc.fillColor(INK).fontSize(10).font("Helvetica").text(D.mandat_complet||"", M, 122, { width: CW, lineGap: 4 });
+
+    // ── PAGES 4-5 : PROGRAMME ────────────────────────────────
+    [
+      { titre: D.prog_j1_titre||"PROGRAMME JOUR 1", pre: "j1", label: "JOUR 01", col: RED },
+      { titre: D.prog_j2_titre||"PROGRAMME JOUR 2", pre: "j2", label: "JOUR 02", col: GOLD }
+    ].forEach(({ titre, pre, label, col }) => {
+      darkHeader(titre, label);
+      for (let i = 1; i <= 6; i++) {
+        const h = D[`${pre}_h${i}`]||"", a = D[`${pre}_a${i}`]||"";
+        if (!h && !a) continue;
+        if (doc.y > H - 90) { doc.addPage(); doc.y = 40; }
+        const ry = doc.y;
+        doc.rect(M, ry, 52, 26).fill(col === RED ? RED : INK);
+        doc.fillColor(WHITE).fontSize(11).font("Helvetica-Bold").text(h, M, ry + 7, { width: 52, align: "center" });
+        doc.fillColor(INK).fontSize(10).font("Helvetica-Bold").text(a, M + 60, ry + 3, { width: CW - 60 });
+        const d = D[`${pre}_d${i}`]||"";
+        if (d) doc.fillColor(GREY).fontSize(8).font("Helvetica").text(d, M + 60, ry + 17, { width: CW - 60 });
+        doc.y = Math.max(doc.y, ry + 32);
+        doc.rect(M, doc.y - 2, CW, 0.5).fill("#E0D0C0"); doc.y += 4;
+      }
+    });
+
+    // ── PAGES 6-10 : LES 5 JEUX ─────────────────────────────
+    for (let n = 1; n <= 5; n++) {
+      const nom = D[`jeu${n}_nom`]||"";
+      if (!nom) continue;
+      const emoji = D[`jeu${n}_emoji`]||"", duree = D[`jeu${n}_duree`]||"", lieu = D[`jeu${n}_lieu`]||"";
+      darkHeader(nom, `JEU ${n}  ${emoji}  ${duree} min · ${lieu}`);
+
+      sectionBar("PRINCIPE", GOLD, INK);
+      doc.fillColor(INK).fontSize(9.5).font("Helvetica").text(D[`jeu${n}_principe`]||"", M, doc.y, { width: CW }); doc.y += 12;
+
+      sectionBar("DÉROULÉ");
+      for (let e = 1; e <= 4; e++) {
+        const et = D[`jeu${n}_etape${e}`]||""; if (!et) continue;
+        if (doc.y > H - 90) { doc.addPage(); doc.y = 40; }
+        const ey = doc.y;
+        doc.rect(M, ey + 2, 16, 16).fill(RED);
+        doc.fillColor(WHITE).fontSize(8).font("Helvetica-Bold").text(`${e}`, M, ey + 6, { width: 16, align: "center" });
+        doc.fillColor(INK).fontSize(9).font("Helvetica").text(et, M + 22, ey + 3, { width: CW - 22 });
+        doc.y = Math.max(doc.y, ey + 22); doc.y += 3;
+      }
+      doc.y += 4;
+
+      if (doc.y > H - 120) { doc.addPage(); doc.y = 40; }
+      sectionBar("QUESTIONS PRÉPARÉES", INK, GOLD);
+      for (let q = 1; q <= 3; q++) {
+        const qu = D[`jeu${n}_question${q}`]||""; if (!qu) continue;
+        const qy = doc.y;
+        doc.fillColor(RED).fontSize(9).font("Helvetica-Bold").text(`Q${q}`, M, qy, { continued: true });
+        doc.fillColor(GREY).font("Helvetica").text(`  ${qu}`, { width: CW - 20 });
+        doc.y += 3;
+      }
+      const mat = D[`jeu${n}_materiel`]||"";
+      if (mat) {
+        doc.y += 4; sectionBar("MATÉRIEL", "#E8D9BE", INK);
+        doc.fillColor(GREY).fontSize(8.5).font("Helvetica").text(mat, M, doc.y, { width: CW });
+      }
+    }
+
+    // ── PAGE 11 : BUDGET ─────────────────────────────────────
+    darkHeader("BUDGET & ACCESSOIRES SHEIN", "§ 11");
+    if (D.accessoires_budget_total) {
+      const by = doc.y;
+      doc.rect(M, by, CW, 28).fill(INK);
+      doc.fillColor(GOLD).fontSize(13).font("Helvetica-Bold").text(`BUDGET TOTAL : ${D.accessoires_budget_total}`, M + 10, by + 8, { width: CW - 20 });
+      doc.y = by + 34;
+    }
+    const cW2 = [135, 135, 50, 130, 65];
+    let tx = M;
+    ["ARTICLE","MOT-CLÉ SHEIN","PRIX","JEU","PRIORITÉ"].forEach((col, i) => {
+      doc.rect(tx, doc.y, cW2[i], 16).fill(RED);
+      doc.fillColor(WHITE).fontSize(7).font("Helvetica-Bold").text(col, tx + 3, doc.y + 5, { width: cW2[i] - 6 });
+      tx += cW2[i];
+    });
+    doc.y += 18;
+    for (let i = 1; i <= 14; i++) {
+      const cat = D[`acc${i}_categorie`]||""; if (!cat) continue;
+      if (doc.y > H - 60) break;
+      tx = M;
+      const row = [cat, D[`acc${i}_shein`]||"", D[`acc${i}_prix_total`]||"", D[`acc${i}_jeu`]||"", D[`acc${i}_priorite`]||""];
+      const bg = i % 2 === 0 ? "#F5EDD8" : WHITE;
+      row.forEach((v, j) => {
+        doc.rect(tx, doc.y, cW2[j], 18).fill(bg);
+        doc.fillColor(j === 2 ? GOLD : INK).fontSize(7.5).font("Helvetica").text(v, tx + 3, doc.y + 5, { width: cW2[j] - 6 });
+        tx += cW2[j];
+      });
+      doc.y += 18;
+    }
+    if (D.planning_j30 || D.planning_j7 || D.planning_j1) {
+      doc.y += 10;
+      doc.fillColor(GOLD).fontSize(8).font("Helvetica-Bold").text("PLANNING COMMANDE", M, doc.y); doc.y += 13;
+      [["J-30", D.planning_j30], ["J-7", D.planning_j7], ["J-1", D.planning_j1]].forEach(([l, v]) => {
+        if (!v) return;
+        doc.fillColor(RED).fontSize(9).font("Helvetica-Bold").text(`${l} : `, M, doc.y, { continued: true });
+        doc.fillColor(GREY).font("Helvetica").text(v); doc.y += 2;
+      });
+    }
+
+    // ── PAGE 12 : VERDICT FINAL ──────────────────────────────
+    newPage(INK);
+    doc.fillColor(GREY).fontSize(9).font("Helvetica").text("VERDICT FINAL", 0, 30, { width: W, align: "center", characterSpacing: 6 });
+    doc.rect(M, 58, CW, 68).stroke(RED).lineWidth(4);
+    doc.fillColor(RED).fontSize(44).font("Helvetica-Bold").text("COUPABLE", 0, 74, { width: W, align: "center", characterSpacing: 8 });
+    doc.rect(M, 146, CW, 1).fill(GOLD);
+    doc.fillColor(GREY).fontSize(9).font("Helvetica").text("Condamné à :", 0, 158, { width: W, align: "center" });
+    doc.fillColor(PAPER).fontSize(12).font("Helvetica-BoldOblique").text(D.verdict_peine||"", M, 176, { width: CW, align: "center" });
+    doc.rect(M, 240, CW, 1).fill(GOLD);
+    doc.fillColor(GOLD).fontSize(8).font("Helvetica-Bold").text("MOT DES TÉMOINS", 0, 256, { width: W, align: "center", characterSpacing: 3 });
+    doc.fillColor(PAPER).fontSize(11).font("Helvetica-Oblique").text(D.mot_de_fin||"", M + 30, 278, { width: CW - 60, align: "center", lineGap: 4 });
+    doc.rect(M, H - 90, CW, 1).fill(GOLD);
+    doc.fillColor(GREY).fontSize(9).font("Helvetica").text("AMIVO", 0, H - 74, { width: W, align: "center", characterSpacing: 8 });
+    doc.fillColor(GREY).fontSize(7).text("EVG & EVJF ULTRA-PERSONNALISÉS PAR IA", 0, H - 58, { width: W, align: "center", characterSpacing: 2 });
+
+    doc.end();
+  });
+}
+
+// ============================================================
 // ROUTES EXPRESS
 // ============================================================
 
@@ -480,15 +686,21 @@ app.post("/generate", async (req, res) => {
       return res.status(400).json({ error: "Missing session_id or claude_output" });
     }
 
-    console.log(`✅ Génération PPTX pour ${DATA.prenom} / ${DATA.destination}`);
+    console.log(`✅ Génération PDF + PPTX pour ${DATA.prenom} / ${DATA.destination}`);
 
-    const base64 = await generatePPTX(DATA);
+    const [pptxBase64, pdfBase64] = await Promise.all([
+      generatePPTX(DATA),
+      generatePDF(DATA)
+    ]);
 
+    const nom = `AMIVO_${DATA.prenom}_${DATA.destination}_LeProcès`;
     res.json({
       success: true,
       prenom: DATA.prenom,
-      filename: `AMIVO_${DATA.prenom}_${DATA.destination}_LeProcès.pptx`,
-      pptx_base64: base64
+      filename: `${nom}.pptx`,
+      pptx_base64: pptxBase64,
+      pdf_filename: `${nom}.pdf`,
+      pdf_base64: pdfBase64
     });
   } catch (err) {
     console.error("❌ Erreur génération PPTX:", err.message);
