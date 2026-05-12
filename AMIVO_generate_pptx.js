@@ -71,7 +71,7 @@ function addStamp(slide, text, x, y, w = 2.5, rotate = -8) {
 function addFooter(slide, num, prenom, destination) {
   slide.addShape("rect", { x: 0, y: 5.3, w: 10, h: 0.325, fill: { color: C.ink }, line: { color: C.ink } });
   addGoldBar(slide, 5.3, 0.025);
-  slide.addText(`AMIVO — LE PROCÈS — ${prenom.toUpperCase()} / ${destination.toUpperCase()}`, { x: 0.3, y: 5.32, w: 7, h: 0.28, fontSize: 7, color: C.grey, charSpacing: 2, margin: 0 });
+  slide.addText(`AMIVO — LE PROCÈS — ${(prenom || "").toUpperCase()} / ${(destination || "").toUpperCase()}`, { x: 0.3, y: 5.32, w: 7, h: 0.28, fontSize: 7, color: C.grey, charSpacing: 2, margin: 0 });
   slide.addText(`${num} / 12`, { x: 8.5, y: 5.32, w: 1.2, h: 0.28, fontSize: 7, color: C.grey, align: "right", margin: 0 });
 }
 
@@ -95,6 +95,122 @@ function parseClaudeOutput(raw) {
 }
 
 // ============================================================
+// NORMALISATION — convertit le format Claude premium → format serveur
+// ============================================================
+function normalizePayload(D, fields) {
+  const N = { ...D };
+
+  // Champs depuis Airtable
+  N.prenom         = fields.prenom        || D.prenom        || "";
+  N.destination    = fields.destination   || D.destination   || "";
+  N.dates          = fields.dates         || D.dates         || "";
+  N.nb_participants = fields.nb_participants || D.nb_participants || "";
+  N.session_id     = fields.session_id    || D.session_id    || "";
+
+  // Alias simples
+  N.dossier_intro  = D.dossier_intro  || D.crime_principal || "";
+  N.mandat_complet = D.mandat_complet || D.mandat_arret    || "";
+  N.verdict_peine  = D.verdict_peine  || D.verdict         || "";
+  N.mot_de_fin     = D.mot_de_fin     || D.mot_temoin      || "";
+
+  // chefs_accusation[] → chef_01_*, chef_02_*, chef_03_*
+  if (Array.isArray(D.chefs_accusation)) {
+    D.chefs_accusation.forEach((c, i) => {
+      if (i >= 3) return;
+      const n = i + 1;
+      N[`chef_0${n}_intitule`] = c.chef      || c.intitule  || "";
+      N[`chef_0${n}_detail`]   = c.detail    || "";
+      N[`chef_0${n}_aggravant`]= c.aggravante|| c.aggravant || "";
+    });
+  }
+
+  // temoins_liste
+  if (!N.temoins_liste) N.temoins_liste = "";
+
+  // programme_j1[] → j1_h1…j1_h6, j1_a1…, j1_d1…
+  N.prog_j1_titre = D.prog_j1_titre || "Programme Jour 1";
+  if (Array.isArray(D.programme_j1)) {
+    D.programme_j1.forEach((s, i) => {
+      if (i >= 6) return;
+      const n = i + 1;
+      N[`j1_h${n}`] = s.heure    || s.h || "";
+      N[`j1_a${n}`] = s.activite || s.a || "";
+      N[`j1_d${n}`] = s.description || s.d || "";
+    });
+  }
+
+  // programme_j2[] → j2_h1…j2_h6, j2_a1…, j2_d1…
+  N.prog_j2_titre = D.prog_j2_titre || "Programme Jour 2";
+  if (Array.isArray(D.programme_j2)) {
+    D.programme_j2.forEach((s, i) => {
+      if (i >= 6) return;
+      const n = i + 1;
+      N[`j2_h${n}`] = s.heure    || s.h || "";
+      N[`j2_a${n}`] = s.activite || s.a || "";
+      N[`j2_d${n}`] = s.description || s.d || "";
+    });
+  }
+
+  // jeux[] → jeu1_nom, jeu1_principe, jeu1_role1_prenom…, jeu1_etape1…, jeu1_question1…
+  if (Array.isArray(D.jeux)) {
+    D.jeux.forEach((jeu, i) => {
+      if (i >= 5) return;
+      const n = i + 1;
+      N[`jeu${n}_nom`]      = jeu.nom      || "";
+      N[`jeu${n}_emoji`]    = jeu.emoji    || "";
+      N[`jeu${n}_duree`]    = jeu.duree    || "";
+      N[`jeu${n}_lieu`]     = jeu.lieu     || "";
+      N[`jeu${n}_principe`] = jeu.principe || "";
+      N[`jeu${n}_materiel`] = jeu.materiel || "";
+
+      // roles : string → role1_prenom / role1_role
+      const rolesRaw = jeu.roles || "";
+      const roleParts = typeof rolesRaw === "string"
+        ? rolesRaw.split(",").map(r => r.trim()).filter(Boolean)
+        : [];
+      roleParts.slice(0, 4).forEach((r, ri) => {
+        const words = r.split(" ");
+        N[`jeu${n}_role${ri+1}_prenom`] = words[0] || "";
+        N[`jeu${n}_role${ri+1}_role`]   = words.slice(1).join(" ") || r;
+      });
+
+      // deroulement[] → etape1…etape4
+      const etapes = Array.isArray(jeu.deroulement) ? jeu.deroulement : (Array.isArray(jeu.etapes) ? jeu.etapes : []);
+      etapes.slice(0, 4).forEach((e, ei) => { N[`jeu${n}_etape${ei+1}`] = e || ""; });
+
+      // questions[]
+      if (Array.isArray(jeu.questions)) {
+        jeu.questions.slice(0, 3).forEach((q, qi) => { N[`jeu${n}_question${qi+1}`] = q || ""; });
+      }
+    });
+  }
+
+  // budget_shein[] → acc1_*, accessoires_budget_total
+  let total = 0;
+  if (Array.isArray(D.budget_shein)) {
+    D.budget_shein.forEach((item, i) => {
+      if (i >= 6) return;
+      const n = i + 1;
+      N[`acc${n}_categorie`]  = item.categorie   || "";
+      N[`acc${n}_shein`]      = item.mot_cle     || item.shein || "";
+      N[`acc${n}_quantite`]   = item.quantite    || "1";
+      N[`acc${n}_prix_total`] = item.prix        || item.prix_total || "";
+      N[`acc${n}_jeu`]        = item.jeu_associe || item.jeu || "";
+      N[`acc${n}_priorite`]   = item.priorite    || "";
+      const p = parseFloat((item.prix || "0").replace(/[^0-9.]/g, ""));
+      if (!isNaN(p)) total += p;
+    });
+  }
+  if (!N.accessoires_budget_total && total > 0) N.accessoires_budget_total = `~${Math.round(total)}€`;
+  if (!N.accessoires_budget_par_personne) N.accessoires_budget_par_personne = "";
+  if (!N.planning_j30) N.planning_j30 = "Commander les accessoires";
+  if (!N.planning_j7)  N.planning_j7  = "Imprimer les documents";
+  if (!N.planning_j1)  N.planning_j1  = "Briefer les amis";
+
+  return N;
+}
+
+// ============================================================
 // GÉNÉRATION PPTX
 // ============================================================
 async function generatePPTX(D) {
@@ -115,7 +231,7 @@ async function generatePPTX(D) {
     s.addText(`Dossier N° ${D.session_id}`, { x: 0.5, y: 0.58, w: 9, h: 0.25, fontSize: 8, color: C.gold, align: "center", charSpacing: 2, margin: 0 });
     s.addText([
       { text: "L'AFFAIRE", options: { fontSize: 20, color: C.grey, charSpacing: 8, breakLine: true } },
-      { text: D.prenom.toUpperCase(), options: { fontSize: 68, color: C.paper, bold: true, charSpacing: 4, breakLine: true } },
+      { text: (D.prenom || "").toUpperCase(), options: { fontSize: 68, color: C.paper, bold: true, charSpacing: 4, breakLine: true } },
     ], { x: 0.5, y: 0.9, w: 9, h: 2.7, align: "center", valign: "middle", margin: 0 });
     s.addText(D.titre_narratif, { x: 1, y: 3.5, w: 8, h: 0.5, fontSize: 13, color: C.paper, align: "center", italic: true, margin: 0 });
     s.addShape("rect", { x: 2.5, y: 4.1, w: 5, h: 0.55, fill: { color: C.red }, line: { color: C.red }, shadow: makeShadow() });
@@ -356,7 +472,7 @@ app.post("/generate", async (req, res) => {
       const fields = await fetchFromAirtable(session_id);
       const rawJson = fields.payload_json;
       if (!rawJson) return res.status(400).json({ error: "No payload_json in Airtable record" });
-      DATA = parseClaudeOutput(rawJson);
+      DATA = normalizePayload(parseClaudeOutput(rawJson), fields);
     } else if (claude_output) {
       // Mode test : JSON passé directement
       DATA = parseClaudeOutput(claude_output);
